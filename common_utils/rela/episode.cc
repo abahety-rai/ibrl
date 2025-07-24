@@ -17,6 +17,17 @@ void Episode::pushObs(const TensorDict& obs) {
   }
 }
 
+void Episode::pushBcObs(const TensorDict& bc_obs) {
+  // Similar to pushObs but for bc_obs
+  if (transition_.bc_obs.size() == 0) {
+    transition_.bc_obs = tensor_dict::allocateBatchStorage(bc_obs, maxSeqLen_);
+  }
+  
+  for (auto& kv : bc_obs) {
+    transition_.bc_obs[kv.first][seqLen_] = kv.second;
+  }
+}
+
 void Episode::pushAction(const TensorDict& action) {
   assert(callOrder_ == 1);
   ++callOrder_;

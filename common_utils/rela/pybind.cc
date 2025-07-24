@@ -14,6 +14,8 @@ PYBIND11_MODULE(rela, m) {
   py::class_<MultiStepTransition, std::shared_ptr<MultiStepTransition>>(
       m, "MultiStepTransition")
       .def_readwrite("obs", &MultiStepTransition::obs)
+      .def_readwrite("bc_obs", &MultiStepTransition::bc_obs)
+      .def_readwrite("next_bc_obs", &MultiStepTransition::next_bc_obs)
       .def_readwrite("h0", &MultiStepTransition::h0)
       .def_readwrite("action", &MultiStepTransition::action)
       .def_readwrite("reward", &MultiStepTransition::reward)
@@ -23,7 +25,9 @@ PYBIND11_MODULE(rela, m) {
   py::class_<SingleStepTransition, std::shared_ptr<SingleStepTransition>>(
       m, "SingleStepTransition")
       .def_readwrite("obs", &SingleStepTransition::obs)
+      .def_readwrite("bc_obs", &SingleStepTransition::bc_obs)
       .def_readwrite("next_obs", &SingleStepTransition::nextObs)
+      .def_readwrite("next_bc_obs", &SingleStepTransition::next_bc_obs)
       .def_readwrite("action", &SingleStepTransition::action)
       .def_readwrite("reward", &SingleStepTransition::reward)
       .def_readwrite("bootstrap", &SingleStepTransition::bootstrap);
@@ -65,6 +69,7 @@ PYBIND11_MODULE(rela, m) {
       .def("init", &Episode::init)
       .def("len", &Episode::len)
       .def("push_obs", &Episode::pushObs)
+      .def("push_bc_obs", &Episode::pushBcObs)
       .def("push_action", &Episode::pushAction)
       .def("push_reward", &Episode::pushReward)
       .def("push_terminal", &Episode::pushTerminal)

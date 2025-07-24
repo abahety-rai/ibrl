@@ -74,8 +74,10 @@ class VitEncoder(nn.Module):
         self.repr_dim = self.cfg.embed_dim * self.vit.num_patches
 
     def forward(self, obs, flatten=True) -> torch.Tensor:
-        assert obs.max() > 5
-        obs = obs / 255.0 - 0.5
+        # if obs.max() <= 5:
+        #     breakpoint()
+        # assert obs.max() > 5
+        # obs = obs / 255.0 - 0.5
         feats: torch.Tensor = self.vit.forward(obs)
         if flatten:
             feats = feats.flatten(1, 2)

@@ -78,6 +78,21 @@ SingleStepTransition SingleStepTransitionReplay::sample_(
       transition.nextObs = tensor_dict::cat(nextFrames, 0);
     }
 
+    // Add bc_obs processing
+    {
+        std::vector<TensorDict> bc_frames;
+        std::vector<TensorDict> next_bc_frames;
+        for (int d = frameStack_ - 1; d >= 0; --d) {
+            int fIdx = std::max(0, tIdx - d);
+            bc_frames.push_back(tensor_dict::index(episode.bc_obs, fIdx));
+            
+            fIdx = std::min(seqLen - 1, tIdx + nStep_ - d);
+            next_bc_frames.push_back(tensor_dict::index(episode.bc_obs, fIdx));
+        }
+        transition.bc_obs = tensor_dict::cat(bc_frames, 0);
+        transition.next_bc_obs = tensor_dict::cat(next_bc_frames, 0);
+    }
+
     transition.action = tensor_dict::index(episode.action, tIdx);
     transition.reward = episode.reward[tIdx];
     transition.bootstrap = episode.bootstrap[tIdx];

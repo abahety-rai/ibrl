@@ -12,6 +12,8 @@ class SingleStepTransition {
   SingleStepTransition() = default;
 
   TensorDict obs;
+  TensorDict bc_obs;  // ← ADD THIS FIELD
+  TensorDict next_bc_obs;  // ← ADD THIS FIELD
   TensorDict nextObs;
   TensorDict action;
   torch::Tensor reward;
@@ -35,6 +37,8 @@ class MultiStepTransition {
   void seqFirst_();
 
   TensorDict obs;
+  TensorDict bc_obs;  // ← ADD THIS FIELD
+  TensorDict next_bc_obs;  // ← ADD THIS FIELD
   TensorDict h0;
   TensorDict action;
   torch::Tensor reward;

@@ -74,13 +74,41 @@ class ReplayBuffer:
         self.num_success = 0
         self.num_episode = 0
 
-    def new_episode(self, obs: dict[str, torch.Tensor]):
+    def new_episode(self, obs: dict[str, torch.Tensor], bc_obs: dict[str, torch.Tensor]):
         self.episode_image_obs = defaultdict(list)
         self.episode.init({})
         self.episode.push_obs(obs)
+        processed_bc_obs = {}
+        for k, v in bc_obs.items():
+            if isinstance(v, torch.Tensor):
+                processed_bc_obs[k] = v
+            elif k == "task_description" and isinstance(v, list):
+                # Convert task description to character encoding
+                task_desc = v[0]  # Take the first task description
+                max_len = 200  # Reasonable max length for task descriptions
+                
+                # Convert string to ASCII values and pad/truncate to fixed length
+                chars = [ord(c) for c in task_desc[:max_len]]
+                chars.extend([0] * (max_len - len(chars)))  # Pad with zeros
+                processed_bc_obs[k] = torch.tensor(chars, dtype=torch.long)
+        self.episode.push_bc_obs(processed_bc_obs)
 
-    def append_obs(self, obs: dict[str, torch.Tensor]):
+    def append_obs(self, obs: dict[str, torch.Tensor], bc_obs: dict[str, torch.Tensor]):
         self.episode.push_obs(obs)
+        processed_bc_obs = {}
+        for k, v in bc_obs.items():
+            if isinstance(v, torch.Tensor):
+                processed_bc_obs[k] = v
+            elif k == "task_description" and isinstance(v, list):
+                # Convert task description to character encoding
+                task_desc = v[0]  # Take the first task description
+                max_len = 200  # Reasonable max length for task descriptions
+                
+                # Convert string to ASCII values and pad/truncate to fixed length
+                chars = [ord(c) for c in task_desc[:max_len]]
+                chars.extend([0] * (max_len - len(chars)))  # Pad with zeros
+                processed_bc_obs[k] = torch.tensor(chars, dtype=torch.long)
+        self.episode.push_bc_obs(processed_bc_obs)
 
     def append_reply(self, reply: dict[str, torch.Tensor]):
         self.episode.push_action(reply)
@@ -95,6 +123,7 @@ class ReplayBuffer:
     def add(
         self,
         obs: dict[str, torch.Tensor],
+        bc_obs: dict[str, torch.Tensor],
         reply: dict[str, torch.Tensor],
         reward: float,
         terminal: bool,
@@ -104,19 +133,51 @@ class ReplayBuffer:
         self.episode.push_action(reply)
         self.episode.push_reward(reward)
         self.episode.push_terminal(float(terminal))
-
+        
         if not terminal:
+            # Process bc_obs to handle non-tensor fields
+            processed_bc_obs = {}
+            for k, v in bc_obs.items():
+                if isinstance(v, torch.Tensor):
+                    processed_bc_obs[k] = v
+                elif k == "task_description" and isinstance(v, list):
+                    # Convert task description to character encoding
+                    task_desc = v[0]  # Take the first task description
+                    max_len = 200  # Reasonable max length for task descriptions
+                    
+                    # Convert string to ASCII values and pad/truncate to fixed length
+                    chars = [ord(c) for c in task_desc[:max_len]]
+                    chars.extend([0] * (max_len - len(chars)))  # Pad with zeros
+                    processed_bc_obs[k] = torch.tensor(chars, dtype=torch.long)
+                    # print("k, processed_bc_obs[k]: ", k, processed_bc_obs[k].shape)
+                # Add other non-tensor field conversions here if needed
+            
+            # for k in processed_bc_obs.keys():
+            #     print("k: ", processed_bc_obs[k])
+
+            self.episode.push_bc_obs(processed_bc_obs)
             self.episode.push_obs(obs)
             return
 
         self._push_episode(success)
+        # breakpoint()
 
     def _push_episode(self, success):
+        print(f"pushing episode {self.num_episode} with success={success}")
+        # breakpoint()
         transition = self.episode.pop_transition()
+        
+        # # Debug: Check what's in the transition
+        # print("Transition bc_obs keys:", transition.bc_obs.keys() if hasattr(transition, 'bc_obs') else "No bc_obs")
+        # print("Transition obs keys:", transition.obs.keys())
+        
+        # NOTE: I guess we are adding all episodes to the regular replay buffer
         self.replay.add(transition)
         self.num_episode += 1
 
+        print(f"success: {success}")
         if not success:
+            print("Skipping episode because of no success")
             return
         self.num_success += 1
 
@@ -127,6 +188,8 @@ class ReplayBuffer:
         if self.bc_max_len > 0 and seq_len > self.bc_max_len:
             print(f"episode too long {seq_len}, max={self.bc_max_len}, ignore")
             return
+
+        # NOTE: I guess we are only adding success episodes to the bc replay buffer
         self.bc_replay.add(transition)
 
         # dump the bc dataset for training
@@ -136,11 +199,14 @@ class ReplayBuffer:
         print(f"Saving bc replay; @{self.num_success} games.")
         size = self.bc_replay.size()
         episodes = self.bc_replay.get_range(size - self.save_per_success, size, "cpu")
+        # self.bc_replay.get_range(1, 2, "cpu")
 
         assert self.save_dir is not None
         save_id = self.num_success // self.save_per_success
-        filename = os.path.join(self.save_dir, f"data{save_id}.h5")
+        # filename = os.path.join(self.save_dir, f"data{save_id}.h5")
+        filename = os.path.join(self.save_dir, f"all_data.h5")
         self._save_replay(filename, episodes)
+        # breakpoint()
 
     def save_replay(self, filename):
         size = self.replay.size()
@@ -151,16 +217,32 @@ class ReplayBuffer:
         print(f"writing replay buffer to {filename}")
 
         size = episodes.seq_len.size(0)
-        with h5py.File(filename, "w") as hf:
-            data_grp = hf.create_group("data")
+        # print("----size: ", size)
+        with h5py.File(filename, "a") as hf:
+            if "data" in hf:
+                # print(f"'data' group already exists in {filename}, fetching existing group.")
+                data_grp = hf["data"]
+                episode_key = len(list(data_grp.keys()))
+            else:
+                data_grp = hf.create_group("data")
+                episode_key = 0
+
+            print("HDF5 episode_key: ", episode_key)
+            # data_grp = hf.create_group("data")
             for i in range(size):
-                ep_data_grp = data_grp.create_group(f"demo_{i}")
+                ep_data_grp = data_grp.create_group(f"demo_{episode_key}")
                 episode_len = int(episodes.seq_len[i].item())
-                # print(f"episode {i}: len: {episode_len}")
+                
+                # Add RL obs
                 for k, v in episodes.obs.items():
                     if k not in ["prop", "state", "sim_state"] + DEFAULT_STATE_KEYS:
                         k = f"{k}_image"
                     ep_data_grp.create_dataset(f"obs/{k}", data=v[:episode_len, i].numpy())
+                
+                # Add BC obs
+                for k, v in episodes.bc_obs.items():
+                    ep_data_grp.create_dataset(f"bc_obs/{k}", data=v[:episode_len, i].numpy())
+
                 action: torch.Tensor = episodes.action["action"][:episode_len, i]
                 ep_data_grp.create_dataset(f"actions", data=action.numpy())
                 ep_data_grp.create_dataset(f"rewards", data=episodes.reward[:episode_len, i].numpy())
@@ -217,6 +299,8 @@ def add_demos_to_replay(
         images = {
             rl_camera: np.array(episode[f"obs/{rl_camera}_image"]) for rl_camera in rl_cameras
         }
+        bc_obs_group = episode["bc_obs"]
+        all_bc_obs = {k: np.array(bc_obs_group[k]) for k in bc_obs_group.keys()}
         all_actions.append(actions)
 
         robot_locs = []
@@ -226,6 +310,7 @@ def add_demos_to_replay(
             for key in PROP_KEYS:
                 robot_locs.append(episode["obs"][key])  # type: ignore
             props = np.concatenate(robot_locs, axis=1).astype(np.float32)
+        # breakpoint()
 
         if use_state:
             all_states = []
@@ -274,22 +359,27 @@ def add_demos_to_replay(
                         s = np.array(episode["obs"][key][i])
                         obs[key] = torch.from_numpy(s)
 
+                bc_obs = {k: torch.from_numpy(all_bc_obs[k][i]) for k in all_bc_obs.keys()}
+
             if i == 0:
-                replay.new_episode(obs)
+                replay.new_episode(obs, bc_obs)
                 continue
 
             action_idx = i - 1
             reply = {"action": torch.from_numpy(actions[action_idx])}
             reward = float(rewards[action_idx]) * reward_scale
+            # print("action_idx: ", action_idx, "rewards[action_idx]: ", rewards[action_idx], "terminals[action_idx]: ", terminals[action_idx])
             success = bool(rewards[action_idx] == 1)
-            terminal = bool(terminals[action_idx])
+            terminal = bool(terminals[action_idx] == 1)
 
-            replay.add(obs, reply, reward, terminal, success, image_obs={})
+            replay.add(obs, bc_obs=bc_obs, reply=reply, reward=reward, terminal=terminal, success=success, image_obs={})
 
             if success:
                 assert terminal
             if terminal:
                 break
+
+        # breakpoint()
 
     print(f"Size of the replay buffer: {replay.size()}, # success: {replay.num_success}")
     if replay.bc_replay is not None:

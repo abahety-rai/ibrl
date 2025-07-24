@@ -14,6 +14,7 @@ from rl.critic import Critic, CriticConfig
 from rl.actor import Actor, ActorConfig
 from rl.actor import FcActor, FcActorConfig
 from rl.critic import MultiFcQ, MultiFcQConfig
+from tools.utils import decode_task_description
 
 
 @dataclass
@@ -168,6 +169,7 @@ class QAgent(nn.Module):
             if obs["state"].dim() == 1:
                 should_unsqueeze = True
         else:
+            # breakpoint()
             if obs[self.rl_camera].dim() == 3:
                 should_unsqueeze = True
 
@@ -177,7 +179,7 @@ class QAgent(nn.Module):
         return should_unsqueeze
 
     def act(
-        self, obs: dict[str, torch.Tensor], *, eval_mode=False, stddev=0.0, cpu=True
+        self, obs: dict[str, torch.Tensor], bc_obs: dict[str, torch.Tensor], *, eval_mode=False, stddev=0.0, cpu=True, batched=True, global_step=0
     ) -> torch.Tensor:
         """This function takes tensor and returns actions in tensor"""
         assert not self.training
@@ -199,11 +201,14 @@ class QAgent(nn.Module):
         elif self.cfg.act_method == "ibrl":
             action = self._act_ibrl(
                 obs=obs,
+                bc_obs=bc_obs,
                 eval_mode=eval_mode,
                 stddev=stddev,
                 clip=None,
                 eps_greedy=self.cfg.ibrl_eps_greedy,
                 use_target=False,
+                batched=batched,
+                global_step=global_step,
             )
         elif self.cfg.act_method == "ibrl_soft":
             action = self._act_ibrl_soft(
@@ -250,25 +255,59 @@ class QAgent(nn.Module):
         self,
         *,
         obs: dict[str, torch.Tensor],
+        bc_obs: dict[str, torch.Tensor],
         eval_mode: bool,
         stddev: float,
         clip: Optional[float],
         eps_greedy: float,
         use_target: bool,
+        batched: bool,
+        global_step: int,
     ) -> torch.Tensor:
         actor = self.actor_target if use_target else self.actor
         if eval_mode:
             assert not actor.training
 
         assert len(self.bc_policies) == 1
+
         bc_policy = self.bc_policies[0]
-        bc_action = bc_policy.act(obs, cpu=False)
+        # # NOTE: bc_obs[key] shape should be [batch, n_history, n_cameras, h, w, 3] and output will be [batch, prediction_horizon, action_dim] if batched is True
+        # # if batched is False, the output will be [prediction_horizon, action_dim]
+        # THIS IS CAUSING THE ISSUE!!!
+        # if batched:
+        #     for k in bc_obs.keys():
+        #         bc_obs[k] = bc_obs[k][0]
+        # change later to batched=batched
+        # remove later. Move all tensors in bc_obs to cuda device 7
+        # for k, v in bc_obs.items():
+        #     if isinstance(v, torch.Tensor):
+        #         bc_obs[k] = v.cuda(device=7)
+        bc_action = bc_policy.predict_action(bc_obs, batched=batched)
+        bc_action = torch.tensor(bc_action, dtype=torch.float32)
+        # uncomment later
+        if not batched:
+            bc_action = bc_action.unsqueeze(0)
+        # TODO: Currently only using the first time step action, will need to look into this more
+        bc_action = bc_action[:, 0]
+        bc_action = bc_action.cuda()
+        # # remove later
+        # bc_action = bc_action[:1]
+        
+
+        # # remove later
+        # if batched:
+        #     bc_action = torch.rand(256, 12).cuda()
+        # else:   
+        #     bc_action = torch.rand(1, 12).cuda()
 
         rl_dist: utils.TruncatedNormal = actor(obs, stddev)
         if eval_mode:
             rl_action = rl_dist.mean
         else:
             rl_action = rl_dist.sample(clip)
+
+        # # remove later
+        # rl_action = rl_action.repeat(16, 1)
 
         rl_bc_actions = torch.stack([rl_action, bc_action], dim=1)
         bsize, num_action, _ = rl_bc_actions.size()
@@ -289,6 +328,10 @@ class QAgent(nn.Module):
 
         # best_action_idx: [batch]
         greedy_action_idx: torch.Tensor = qa.argmax(1)
+        # remove later
+        if global_step < 1000:
+            greedy_action_idx = torch.tensor([1])
+        # print("greedy_action_idx: ", greedy_action_idx)
         greedy_action = rl_bc_actions[range(bsize), greedy_action_idx]
         # actions: [batch, action_dim]
 
@@ -324,6 +367,10 @@ class QAgent(nn.Module):
                     self.stats["actor/anorm_bc"].append(bc_action_norm)
                     self.stats["actor/bc_train"].append(use_bc, bsize)
 
+        # action = rl_action
+        # print("action: ", action.shape)
+
+        # shape of action is [1, 12]
         return action
 
     def _act_ibrl_soft(
@@ -400,6 +447,9 @@ class QAgent(nn.Module):
         discount: torch.Tensor,
         next_obs: dict[str, torch.Tensor],
         stddev: float,
+        bc_obs: dict[str, torch.Tensor],
+        next_bc_obs: dict[str, torch.Tensor],
+        global_step: int,
     ):
         with torch.no_grad():
             # use train mode as we use actor dropout
@@ -416,11 +466,14 @@ class QAgent(nn.Module):
             elif self.cfg.bootstrap_method == "ibrl":
                 next_action = self._act_ibrl(
                     obs=next_obs,
+                    bc_obs=next_bc_obs,
                     eval_mode=False,
                     stddev=stddev,
                     clip=self.cfg.stddev_clip,
                     eps_greedy=1.0,
                     use_target=True,
+                    batched=True,
+                    global_step=global_step,
                 )
             elif self.cfg.bootstrap_method == "ibrl_soft":
                 next_action = self._act_ibrl_soft(
@@ -432,6 +485,9 @@ class QAgent(nn.Module):
                 )
             else:
                 assert False, f"unknown bootstrap method {self.cfg.bootstrap_method}"
+
+            # # remove later
+            # next_action = torch.rand(256, 12).cuda()
 
             if isinstance(self.critic_target, Critic):
                 target_q1, target_q2 = self.critic_target.forward(
@@ -581,11 +637,17 @@ class QAgent(nn.Module):
         update_actor,
         bc_batch=None,
         ref_agent: Optional["QAgent"] = None,
+        global_step: int = 0,
     ):
         obs: dict[str, torch.Tensor] = batch.obs
         reward: torch.Tensor = batch.reward
         discount: torch.Tensor = batch.bootstrap
         next_obs: dict[str, torch.Tensor] = batch.next_obs
+        bc_obs: dict[str, torch.Tensor] = batch.bc_obs
+        next_bc_obs: dict[str, torch.Tensor] = batch.next_bc_obs
+        # Convert the batch of task descriptions (shape [256, 200]) into a list of strings
+        task_descriptions = [decode_task_description(desc) for desc in next_bc_obs["task_description"]]
+        next_bc_obs["task_description"] = task_descriptions
 
         if not self.use_state:
             obs["feat"] = self._encode(obs, augment=True)
@@ -594,6 +656,8 @@ class QAgent(nn.Module):
 
         metrics = {}
         metrics["data/batch_R"] = reward.mean().item()
+        # NOTE: Maybe use this to pretrain the critic?
+        # print("===== Updating critic ======")
         critic_metric = self.update_critic(
             obs=obs,
             reply=batch.action,
@@ -601,6 +665,9 @@ class QAgent(nn.Module):
             discount=discount,
             next_obs=next_obs,
             stddev=stddev,
+            bc_obs=bc_obs,
+            next_bc_obs=next_bc_obs,
+            global_step=global_step,
         )
         utils.soft_update_params(self.critic, self.critic_target, self.cfg.critic_target_tau)
         metrics.update(critic_metric)
@@ -612,6 +679,7 @@ class QAgent(nn.Module):
         if not self.use_state:
             obs["feat"] = obs["feat"].detach()
 
+        # print("===== Updating actor ======")
         if bc_batch is None:
             actor_metric = self.update_actor(obs, stddev)
         else:

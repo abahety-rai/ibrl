@@ -52,6 +52,8 @@ class Episode {
 
   MultiStepTransition popTransition();
 
+  void pushBcObs(const TensorDict& bc_obs);
+
  private:
   const int multiStep_;
   const int maxSeqLen_;

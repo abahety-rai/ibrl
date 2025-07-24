@@ -1,0 +1,37 @@
+task_name: "PnPCounterToSink"
+camera_names: ["robot0_agentview_left", "robot0_agentview_right", "robot0_eye_in_hand"]
+rl_cameras: ["robot0_eye_in_hand"]
+bc_cameras: ["robot0_agentview_left", "robot0_agentview_right", "robot0_eye_in_hand"]
+prop_stack: 1
+episode_length: 500 # TODO: change this to 500 later
+stddev_max: 0.1
+bc_policy: "/mnt/proj-maple/abahety/visuomotor/visuomotor/checkpoints/policy-exploration/multitask_diffusion_mg-3000_step=136719.ckpt"
+preload_num_data: 2 # Change to 5
+preload_datapath: "exps/rl/run1/all_data.h5"
+num_warm_up_episode: 0 # Change this if we want to collect some warmup data
+num_train_step: 200000
+log_per_step: 200 # TODO: Note this
+batch_size: 256 # TODO: change this to 256 later
+replay_buffer_size: 1000
+use_wb: 1
+wb_exp: "policy-exploration"
+wb_run: "trial_run"
+wb_group: "rl_test"
+mp_eval: 1
+freeze_bc_replay: 1 # Note this
+save_per_success: 0 # if freeze_bc_replay is 0, then we save every success episode else, we set it to 0
+use_state: 0
+update_freq: 2 # TODO: change this to 1 or 2 later
+q_agent:
+  act_method: "ibrl"
+  use_prop: 1
+  vit:
+    embed_style: "embed2"
+    depth: 1
+  actor:
+    dropout: 0.5
+    hidden_dim: 1024
+    feature_dim: 128
+  critic:
+    spatial_emb: 1024
+    hidden_dim: 1024

@@ -118,7 +118,7 @@ class MultiCounter:
             if v.counter > 1:
                 continue
             info = str(global_counter) + ": " + k.ljust(self.max_key_len + 2)
-            print(v.summary(info=info))
+            # print(v.summary(info=info))
 
         for k in sorted_keys:
             v = self.stats[k]
